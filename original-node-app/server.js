@@ -23,6 +23,11 @@ let marketTime = null;
 let markets = [];
 let errors = { btc: null, kalshi: null };
 const priceHistory = [];
+const checkpointMonitor = require('./checkpoint-monitor')({axios, io,
+  getMarkets:()=>markets, getBTC:()=>({price:btc,source:btcSource,time:btcTime}),
+  getSignal:()=>computePaperSignal(),
+  supabaseUrl:process.env.KALSHIBOT_SUPABASE_URL,
+  supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY});
 let busyBTC = false, busyKalshi = false;
 // Experimental spot momentum observations are not trained predictions.
 function computePaperSignal() {
@@ -165,6 +170,7 @@ app.get('/api/health', (_req,res) => res.json({status:'ok', uptime:process.uptim
 app.get('/api/market-data', (_req,res) => res.json({mode:'read-only',btcPrice:btc,btcSource,btcUpdatedAt:btcTime,markets,marketsUpdatedAt:marketTime,errors,priceHistory}));
 app.get('/api/paper-signal', (_req,res)=>res.json({mode:'paper-only',...computePaperSignal()}));
 app.get('/api/paper-journal', (_req,res)=>res.json(paperSummary()));
+app.get('/api/checkpoints', (_req,res)=>res.json(checkpointMonitor.summary()));
 app.get('/api/bot/status', (_req,res) => res.json({running:false, mode:'read-only'}));
 app.get('/api/state', (_req,res) => res.json(snapshot()));
 app.get('/api/ml', (_req,res) => res.json({trained:false,note:'AI model disabled in read-only mode'}));
@@ -209,7 +215,7 @@ async function getBTC() {
     io.emit('readonly:history',priceHistory);
     io.emit('paper:journal',paperSummary());
     io.emit('connection:binance',true);
-    updatePaperJournal();const signal=computePaperSignal();io.emit('intent',signal.intent);io.emit('model',signal.model);
+    updatePaperJournal();checkpointMonitor.tick();const signal=computePaperSignal();io.emit('intent',signal.intent);io.emit('model',signal.model);
   } catch(err) {
     errors.btc=err.message;io.emit('connection:binance',false);
     console.error('[ReadOnly BTC]',err.message);
@@ -228,11 +234,11 @@ async function getKalshi() {
     const now=Date.now();
     markets=(resp.data?.markets||[]).filter(m=>m.close_time && Date.parse(m.close_time)>now).map(m=>{
       const closeTime=Date.parse(m.close_time);
-      return {ticker:String(m.ticker||''),status:m.status||'open',yesBid:centsField(m,'yes_bid'),yesAsk:centsField(m,'yes_ask'),noBid:centsField(m,'no_bid'),noAsk:centsField(m,'no_ask'),secondsUntilClose:Math.max(0,Math.floor((closeTime-now)/1000)),closeTime};
+      return {ticker:String(m.ticker||''),status:m.status||'open',openTime: m.open_time?Date.parse(m.open_time):null,yesBid:centsField(m,'yes_bid'),yesAsk:centsField(m,'yes_ask'),noBid:centsField(m,'no_bid'),noAsk:centsField(m,'no_ask'),secondsUntilClose:Math.max(0,Math.floor((closeTime-now)/1000)),closeTime};
     }).sort((a,b)=>a.closeTime-b.closeTime).slice(0,25);
     marketTime=new Date().toISOString();errors.kalshi=null;
     io.emit('markets',markets);io.emit('connection:kalshi',true);
-    updatePaperJournal();const signal=computePaperSignal();io.emit('intent',signal.intent);io.emit('model',signal.model);
+    updatePaperJournal();checkpointMonitor.tick();const signal=computePaperSignal();io.emit('intent',signal.intent);io.emit('model',signal.model);
   } catch(err) {
     errors.kalshi=err.response?`HTTP ${err.response.status}: ${err.message}`:err.message;
     io.emit('connection:kalshi',false);
@@ -246,14 +252,17 @@ io.on('connection',socket=>{
   if(btc) socket.emit('readonly:btc',{price:btc,source:btcSource,timestamp:btcTime});
   socket.emit('readonly:history',priceHistory);
   socket.emit('paper:journal',paperSummary());
+  socket.emit('checkpoint:summary',checkpointMonitor.summary());
   const paper=computePaperSignal();socket.emit('intent',paper.intent);socket.emit('model',paper.model);
   socket.emit('connection:kalshi',!!marketTime);
 });
 server.listen(PORT,async()=>{
   console.log(`[ReadOnly] Mission Control on port ${PORT}; NO TRADING ENGINE LOADED`);
   await loadPaperJournal();
+  await checkpointMonitor.load();
   getBTC();getKalshi();
   setInterval(getBTC,15000);
   setInterval(getKalshi,30000);
   setInterval(()=>{updatePaperJournal();flushPaperWrites().catch(()=>{});io.emit('paper:journal',paperSummary());},15000);
+  setInterval(()=>{checkpointMonitor.tick();checkpointMonitor.flush().catch(()=>{});},15000);
 });
