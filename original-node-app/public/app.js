@@ -18,20 +18,7 @@ let state = {
 
 let startTime = null; // Set from server's persistent startTime
 
-// ========== Restore from localStorage ==========
-try {
-  const savedPnl = localStorage.getItem('kalshibot_pnlHistory');
-  if (savedPnl) {
-    const parsed = JSON.parse(savedPnl);
-    if (Array.isArray(parsed) && parsed.length > 0) {
-      state.pnlHistory = parsed;
-    }
-  }
-  const savedStart = localStorage.getItem('kalshibot_startTime');
-  if (savedStart) startTime = parseInt(savedStart, 10);
-} catch (e) {
-  // Ignore localStorage errors
-}
+// No saved live-trading P&L is restored in this paper-only viewer.
 
 // ========== DOM Elements ==========
 const el = (id) => document.getElementById(id);
@@ -122,7 +109,7 @@ function updateBtcPrice(price) {
     });
     srcEl.textContent = price.redstone
       ? `Binance | RS: $${Number(price.redstone).toLocaleString('en-US', { maximumFractionDigits: 0 })}`
-      : 'Binance Live';
+      : 'Public BTC spot (not Binance)';
   } else if (price.redstone) {
     btcEl.textContent = '$' + Number(price.redstone).toLocaleString('en-US', {
       minimumFractionDigits: 2,
@@ -135,7 +122,7 @@ function updateBtcPrice(price) {
 function updatePnL(stats) {
   const pnlEl = el('total-pnl');
   const pnl = stats.totalPnL || 0;
-  pnlEl.textContent = (pnl >= 0 ? '+' : '') + '$' + pnl.toFixed(2);
+  pnlEl.textContent = '--';
   pnlEl.className = 'metric-value ' + (pnl >= 0 ? 'positive' : 'negative');
 
   el('win-loss').textContent = `${stats.wins || 0}W / ${stats.losses || 0}L`;
@@ -144,7 +131,7 @@ function updatePnL(stats) {
   const volume = stats.volumeTraded || 1;
   const roi = (pnl / volume) * 100;
   const roiEl = el('roi-value');
-  roiEl.textContent = (roi >= 0 ? '+' : '') + roi.toFixed(1) + '%';
+  roiEl.textContent = '--';
   roiEl.className = 'metric-value ' + (roi >= 0 ? 'positive' : 'negative');
 
   el('trades-per-hour').textContent = (stats.tradesPerHour || 0).toFixed(1) + ' trades/hr';
@@ -196,7 +183,7 @@ function updateModel(model) {
   // 1H Trend indicator
   const trendEl = el('intent-trend');
   if (trendEl) {
-    if (!model.trendWarmup) {
+    if (model.trendWarmup) {
       trendEl.textContent = 'WARMING UP';
       trendEl.className = 'detail-value trend-warmup';
     } else {
@@ -370,12 +357,6 @@ function updateStats(stats) {
 function updateChart(pnlHistory) {
   if (!pnlHistory || pnlHistory.length === 0) return;
 
-  // Persist to localStorage for page refresh survival
-  try {
-    localStorage.setItem('kalshibot_pnlHistory', JSON.stringify(pnlHistory.slice(-500)));
-  } catch (e) {
-    // localStorage might be full or disabled
-  }
 
   const labels = pnlHistory.map(p =>
     new Date(p.timestamp).toLocaleTimeString('en-US', { hour12: false, hour: '2-digit', minute: '2-digit' })
@@ -443,12 +424,12 @@ function updateToggleUI(running) {
     toggleBtn.classList.add('running');
     toggleBtn.classList.remove('stopped');
     toggleIcon.innerHTML = '&#9632;'; // stop square
-    toggleLabel.textContent = 'STOP';
+    toggleLabel.textContent = 'READ ONLY';
   } else {
     toggleBtn.classList.remove('running');
     toggleBtn.classList.add('stopped');
     toggleIcon.innerHTML = '&#9654;'; // play triangle
-    toggleLabel.textContent = 'START';
+    toggleLabel.textContent = 'READ ONLY';
   }
 }
 
@@ -483,25 +464,6 @@ socket.on('snapshot', (data) => {
   state.intent = data.intent || {};
   state.stats = data.stats || {};
   state.model = data.model || {};
-
-  // Reconcile: if server stats show $0 P&L but pnlHistory has data, use pnlHistory's cumulative
-  if ((!state.stats.totalPnL || state.stats.totalPnL === 0) && state.pnlHistory.length > 0) {
-    const lastEntry = state.pnlHistory[state.pnlHistory.length - 1];
-    if (lastEntry && lastEntry.cumulative && lastEntry.cumulative !== 0) {
-      state.stats.totalPnL = lastEntry.cumulative;
-      // Also reconstruct win/loss counts from pnlHistory if stats are stale
-      if (!state.stats.totalTrades || state.stats.totalTrades === 0) {
-        let wins = 0, losses = 0;
-        for (const entry of state.pnlHistory) {
-          if (entry.pnl > 0) wins++;
-          else if (entry.pnl < 0) losses++;
-        }
-        state.stats.totalTrades = state.pnlHistory.length;
-        state.stats.wins = wins;
-        state.stats.losses = losses;
-      }
-    }
-  }
 
   // Use persistent startTime from server (original session start)
   startTime = data.startTime || data.stats?.startTime || startTime;
@@ -630,25 +592,3 @@ socket.on('readonly:btc', ({price,source})=>{
 });
 socket.on('readonly:history',updateSpotChart);
 
-// Private account check is initiated only by the person entering the viewer password.
-// Never persist the password, account balance, or positions to browser storage.
-const accountButton=el('account-view-button');
-if(accountButton) accountButton.addEventListener('click',async()=>{
-  const password=window.prompt('Enter your ACCOUNT_VIEW_PASSWORD from Render (not your Kalshi password):');
-  if(!password)return;
-  accountButton.disabled=true;
-  el('account-view-status').textContent='Connecting securely...';
-  try {
-    const response=await fetch('/api/account',{
-      headers:{Authorization:'Basic '+btoa('viewer:'+password)},cache:'no-store'
-    });
-    const data=await response.json();
-    if(!response.ok) throw new Error(data.error||'Account request failed');
-    el('balance-value').textContent='$'+Number(data.cashBalanceUSD).toFixed(2);
-    el('balance-available').textContent='Kalshi cash balance (private)';
-    el('account-view-status').textContent='Connected • Portfolio value $'+Number(data.portfolioValueUSD).toFixed(2)+' • as of '+new Date(data.asOf).toLocaleTimeString();
-    const list=el('account-position-details');
-    list.textContent=(data.positions.length?data.positions.map(p=>p.ticker+': '+p.position+' contracts').join(' | '):'No nonzero positions reported');
-  } catch(err) {el('account-view-status').textContent=err.message;}
-  finally {accountButton.disabled=false;}
-});
