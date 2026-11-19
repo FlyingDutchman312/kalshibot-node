@@ -124,6 +124,15 @@
       <div class="metric-sub" style="padding-top:8px;">Forward results only start after KALSHIBOT_FORWARD_START_UTC is configured. No historical signals are relabeled as forward tests. No order execution; qualification never unlocks trading.</div>
     </section>
 
+    <section class="panel full-panel" id="kalshi-account-panel" style="grid-column:1/-1;padding:14px;">
+      <div class="panel-header"><span class="panel-title">KALSHI PRODUCTION ACCOUNT • READ ONLY • PRIVATE VIEW</span></div>
+      <p class="metric-sub">This view does not enable any order placement. Enter only the separately configured viewer passphrase here, NEVER a Kalshi API key or private key.</p>
+      <input id="kalshi-account-pass" type="password" autocomplete="off" placeholder="Viewer passphrase" style="padding:8px;max-width:320px;background:#172031;color:white;border:1px solid #667" />
+      <button id="kalshi-account-unlock" type="button" style="padding:8px;margin:6px;cursor:pointer">Connect read-only view</button>
+      <button id="kalshi-account-lock" type="button" style="padding:8px;margin:6px;cursor:pointer">Lock view</button>
+      <div id="kalshi-account-status" class="metric-sub">Locked • no account data loaded</div>
+      <div id="kalshi-account-data" class="metric-sub" style="padding-top:10px"></div>
+    </section>
     <!-- Row 2: Bot Intent + Model -->
     <section class="panel wide-panel" id="panel-intent">
       <div class="panel-header">
@@ -297,5 +306,6 @@
   <script src="official-outcomes.js?v=phase33-20261119"></script>
   <script src="performance-analytics.js?v=phase34-20261119"></script>
   <script src="research-quality.js?v=phase35-20261119"></script>
+  <script src="kalshi-account-view.js?v=readonly-20261119"></script>
 </body>
 </html>

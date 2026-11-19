@@ -39,6 +39,7 @@ const researchQuality=require('./research-quality')({axios,officialOutcomes,
   supabaseUrl:process.env.KALSHIBOT_SUPABASE_URL,
   supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY,
   forwardStartUtc:process.env.KALSHIBOT_FORWARD_START_UTC});
+const accountViewer=require('./kalshi-account-readonly')({axios});
 let busyBTC = false, busyKalshi = false;
 // Experimental spot momentum observations are not trained predictions.
 function computePaperSignal() {
@@ -182,6 +183,7 @@ app.get('/api/market-data', (_req,res) => res.json({mode:'read-only',btcPrice:bt
 app.get('/api/paper-signal', (_req,res)=>res.json({mode:'paper-only',...computePaperSignal()}));
 app.get('/api/paper-journal', (_req,res)=>res.json(paperSummary()));
 app.get('/api/checkpoints', (_req,res)=>res.json(checkpointMonitor.summary()));
+app.get('/api/account-view', accountViewer.handler);
 app.get('/api/research-quality', async (_req,res)=>{
   res.json(await researchQuality.performance());
 });
