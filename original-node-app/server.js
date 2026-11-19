@@ -40,7 +40,9 @@ function passMatches(value) {
 }
 function kalshiGet(pathname) {
   const timestamp=String(Date.now());
-  const signature=crypto.sign('sha256', Buffer.from(timestamp+'GET'+pathname), {
+  const signature=crypto.sign('sha256', 
+Buffer.from(timestamp + 'GET' + '/trade-api/v2' + pathname)
+, {
     key:KALSHI_PRIVATE_KEY_PEM,
     padding:crypto.constants.RSA_PKCS1_PSS_PADDING,
     saltLength:crypto.constants.RSA_PSS_SALTLEN_DIGEST
