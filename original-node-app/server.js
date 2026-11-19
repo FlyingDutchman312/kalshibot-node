@@ -1,211 +1,114 @@
 #!/usr/bin/env node
-
-/**
- * Kalshibot Server — Agentic Architecture
- *
- * Entry point that creates the MasterAgent (which owns the Orchestrator,
- * SkillRegistry, and all sub-agent skills), wires up the Express/Socket.io
- * UI layer, and manages the bot lifecycle.
- *
- * Architecture:
- *   server.js → MasterAgent → Orchestrator → Skills
- *
- * The legacy BotEngine is preserved at `node kalshi-bot.js` for fallback.
+/** Kalshibot Mission Control: hard read-only public market viewer.
+ * Intentionally does not import, initialize, or start any trading agent.
  */
-
 require('dotenv').config();
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const axios = require('axios');
 const path = require('path');
-const { MasterAgent } = require('./agents');
 
-const PORT = process.env.PORT || 3333;
-
-// Build config from env
-const config = {
-  KALSHI_API_KEY: process.env.KALSHI_API_KEY,
-  KALSHI_PRIVATE_KEY_PATH: process.env.KALSHI_PRIVATE_KEY_PATH || './kalshi_private_key.pem',
-  KALSHI_API_BASE: process.env.KALSHI_API_BASE || 'https://api.elections.kalshi.com',
-
-  POLYMARKET_GAMMA_API: 'https://gamma-api.polymarket.com',
-  POLYMARKET_CLOB_API: 'https://clob.polymarket.com',
-
-  SERIES_TICKER: process.env.SERIES_TICKER || 'KXBTC15M',
-  SLOT_DURATION: parseInt(process.env.SLOT_DURATION) || 900, // 15 min
-
-  // Strategy thresholds
-  MIN_EDGE: parseFloat(process.env.MIN_EDGE) || 10.0,
-  // Backtest-optimized: higher threshold to filter overconfident signals
-  MIN_DIVERGENCE: parseFloat(process.env.MIN_DIVERGENCE) || 15.0,
-  TRADING_WINDOW: parseInt(process.env.TRADING_WINDOW) || 4, // minutes
-  // Backtest-optimized: contracts above 65c have terrible payoff ratio
-  MIN_CONTRACT_PRICE: parseInt(process.env.MIN_CONTRACT_PRICE) || 35, // cents
-  MAX_CONTRACT_PRICE: parseInt(process.env.MAX_CONTRACT_PRICE) || 65, // cents
-
-  // 1H Trend indicator
-  TREND_ENABLED: process.env.TREND_ENABLED !== 'false',
-  TREND_FAST_PERIOD: parseInt(process.env.TREND_FAST_PERIOD) || 720,     // 12 min
-  TREND_SLOW_PERIOD: parseInt(process.env.TREND_SLOW_PERIOD) || 2700,    // 45 min
-  TREND_ROC_WINDOW: parseInt(process.env.TREND_ROC_WINDOW) || 1800,      // 30 min
-  TREND_ROC_THRESHOLD: parseFloat(process.env.TREND_ROC_THRESHOLD) || 0.02,
-  TREND_BOOST: parseFloat(process.env.TREND_BOOST) || 0.25,
-  TREND_PENALTY: parseFloat(process.env.TREND_PENALTY) || 0.40,
-
-  KALSHI_TAKER_FEE_RATE: parseFloat(process.env.KALSHI_TAKER_FEE_RATE) || 0.07,
-
-  // Position sizing
-  // Fractional Kelly is applied to fee-adjusted contract economics
-  USE_KELLY_SIZING: process.env.USE_KELLY_SIZING !== 'false',
-  KELLY_FRACTION: parseFloat(process.env.KELLY_FRACTION) || 0.08,
-  MAX_POSITION_SIZE: parseFloat(process.env.MAX_POSITION_SIZE) || 5,
-  MAX_POSITIONS_PER_CONTRACT: parseInt(process.env.MAX_POSITIONS_PER_CONTRACT) || 1,
-  MAX_TOTAL_OPEN_POSITIONS: parseInt(process.env.MAX_TOTAL_OPEN_POSITIONS) || 10,
-};
-
-// Express + Socket.io
 const app = express();
 const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*' },
-});
+const io = new Server(server);
+const PORT = Number(process.env.PORT) || 3333;
+const SERIES_TICKER = process.env.SERIES_TICKER || 'KXBTC15M';
+const KALSHI_BASE = 'https://api.elections.kalshi.com/trade-api/v2';
+const headers = { 'User-Agent': 'KalshibotReadOnly/1.0', 'Accept': 'application/json' };
+let btc = null;
+let btcSource = null;
+let btcTime = null;
+let marketTime = null;
+let markets = [];
+let errors = { btc: null, kalshi: null };
+const priceHistory = [];
+let busyBTC = false, busyKalshi = false;
 
-// Serve static UI
 app.use(express.static(path.join(__dirname, 'public')));
-
-// Create the MasterAgent
-const agent = new MasterAgent(config);
-
-// Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', uptime: process.uptime(), botRunning: agent.running });
+app.get('/api/health', (_req,res) => res.json({status:'ok', uptime:process.uptime(),botRunning:false, mode:'read-only',btcUpdatedAt:btcTime,marketsUpdatedAt:marketTime}));
+app.get('/api/market-data', (_req,res) => res.json({mode:'read-only',btcPrice:btc,btcSource,btcUpdatedAt:btcTime,markets,marketsUpdatedAt:marketTime,errors,priceHistory}));
+app.get('/api/bot/status', (_req,res) => res.json({running:false, mode:'read-only'}));
+app.get('/api/state', (_req,res) => res.json(snapshot()));
+app.get('/api/ml', (_req,res) => res.json({trained:false,note:'AI model disabled in read-only mode'}));
+app.get('/api/skills', (_req,res) => res.json({skills:[],orchestrator:null,note:'Trading agent disabled'}));
+// Fail closed for ALL write operations, including unrecognized routes.
+app.use((_req,res,next) => {
+  if (!['GET','HEAD','OPTIONS'].includes(_req.method)) return res.status(403).json({status:'disabled',message:'Read-only market viewer: trading and writes are disabled'});
+  next();
 });
 
-// Bot control: start/stop
-app.post('/api/bot/start', (req, res) => {
-  if (agent.running) {
-    return res.json({ status: 'already_running' });
-  }
-  // Respond immediately — start() is long-running (connects to feeds, waits for prices)
-  res.json({ status: 'starting' });
-  agent.start()
-    .then(() => {
-      io.emit('bot:status', { running: true });
-    })
-    .catch((err) => {
-      console.error('[Server] Bot start failed:', err.message);
-      io.emit('bot:status', { running: false, error: err.message });
-    });
-});
-
-app.post('/api/bot/stop', (req, res) => {
-  if (!agent.running) {
-    return res.json({ status: 'already_stopped' });
-  }
-  agent.stop();
-  io.emit('bot:status', { running: false });
-  res.json({ status: 'stopped' });
-});
-
-app.get('/api/bot/status', (req, res) => {
-  res.json({ running: agent.running });
-});
-
-// API: get current state
-app.get('/api/state', (req, res) => {
-  if (agent && agent.state) {
-    res.json(agent.state.getSnapshot());
-  } else {
-    res.json({ error: 'Agent not started' });
-  }
-});
-
-// API: force save state to disk
-app.post('/api/save', (req, res) => {
-  if (agent && agent.state) {
-    agent.state.saveNow();
-    res.json({ status: 'saved' });
-  } else {
-    res.json({ error: 'Agent not started' });
-  }
-});
-
-// API: ML pipeline status
-app.get('/api/ml', (req, res) => {
-  const mlScorer = agent.registry.get('ml-signal-scorer');
-  if (mlScorer) {
-    const mlPipeline = require('./lib/ml-pipeline');
-    res.json(mlPipeline.describe());
-  } else {
-    res.json({ trained: false, note: 'ML scorer not initialized' });
-  }
-});
-
-// API: get agent skill registry status
-app.get('/api/skills', (req, res) => {
-  res.json({
-    skills: agent.registry.describeAll(),
-    orchestrator: agent.orchestrator.describe(),
-  });
-});
-
-// Socket.io: push updates to UI
-io.on('connection', (socket) => {
-  console.log(`[Server] UI connected: ${socket.id}`);
-
-  // Send full snapshot on connect
-  socket.emit('bot:status', { running: agent.running });
-  if (agent.state) {
-    socket.emit('snapshot', agent.state.getSnapshot());
-  }
-
-  // Forward state events to this socket
-  const events = [
-    'price:binance', 'price:redstone', 'balance', 'markets',
-    'intent', 'model', 'trade',
-    'order:pending', 'order:removed',
-    'position:open', 'position:close', 'position:updated',
-    'stats', 'connection:kalshi', 'connection:polymarket', 'connection:binance',
-  ];
-
-  const handlers = {};
-  for (const event of events) {
-    handlers[event] = (data) => socket.emit(event, data);
-    if (agent.state) {
-      agent.state.on(event, handlers[event]);
+function snapshot() {
+  return {
+    connections: {binance:!!btc,kalshi:!!marketTime,polymarket:false,redstone:false},
+    btcPrice:{binance:btc}, balance:{total:0,available:0},
+    activeMarkets:markets,openPositions:[],tradeLog:[],pnlHistory:[],
+    intent:{status:'read_only',action:'NONE',message:'READ-ONLY MARKET VIEWER — trading disabled'},
+    stats:{totalPnL:0,wins:0,losses:0,totalTrades:0},model:{},startTime:null,
+  };
+}
+function getNumber(value) { const n=Number(value); return Number.isFinite(n)?n:null; }
+async function getBTC() {
+  if(busyBTC) return;
+  busyBTC=true;
+  try {
+    let price,source;
+    try {
+      const resp=await axios.get('https://api.coinbase.com/v2/prices/BTC-USD/spot',{timeout:8000,headers});
+      price=getNumber(resp.data?.data?.amount);source='Coinbase Spot';
+      if(!price || price<=0) throw Error('Invalid Coinbase price');
+    } catch (primaryError) {
+      const resp=await axios.get('https://api.kraken.com/0/public/Ticker?pair=XBTUSD',{timeout:8000,headers});
+      const pair=Object.values(resp.data?.result||{})[0];
+      price=getNumber(pair?.c?.[0]);source='Kraken Spot';
+      if(!price || price<=0) throw Error('Invalid Kraken price; Coinbase failed: '+primaryError.message);
     }
-  }
-
-  socket.on('disconnect', () => {
-    console.log(`[Server] UI disconnected: ${socket.id}`);
-    for (const event of events) {
-      try {
-        if (agent.state) {
-          agent.state.removeListener(event, handlers[event]);
-        }
-      } catch (e) {
-        // Ignore cleanup errors
-      }
-    }
-  });
+    btc=price;btcSource=source;btcTime=new Date().toISOString();errors.btc=null;
+    priceHistory.push({timestamp:Date.now(),price});
+    while(priceHistory.length>180) priceHistory.shift();
+    io.emit('price:binance',{mid:btc,bid:btc,ask:btc,source});
+    io.emit('readonly:btc',{price,source,timestamp:btcTime});
+    io.emit('readonly:history',priceHistory);
+    io.emit('connection:binance',true);
+  } catch(err) {
+    errors.btc=err.message;io.emit('connection:binance',false);
+    console.error('[ReadOnly BTC]',err.message);
+  } finally {busyBTC=false;}
+}
+function centsField(m,name) {
+  const inCents=getNumber(m[name]);
+  if(inCents!==null) return inCents/100;
+  return getNumber(m[name+'_dollars']);
+}
+async function getKalshi() {
+  if(busyKalshi) return;
+  busyKalshi=true;
+  try {
+    const resp=await axios.get(KALSHI_BASE+'/markets',{params:{series_ticker:SERIES_TICKER,status:'open',limit:100},timeout:10000,headers});
+    const now=Date.now();
+    markets=(resp.data?.markets||[]).filter(m=>m.close_time && Date.parse(m.close_time)>now).map(m=>{
+      const closeTime=Date.parse(m.close_time);
+      return {ticker:String(m.ticker||''),status:m.status||'open',yesBid:centsField(m,'yes_bid'),yesAsk:centsField(m,'yes_ask'),noBid:centsField(m,'no_bid'),noAsk:centsField(m,'no_ask'),secondsUntilClose:Math.max(0,Math.floor((closeTime-now)/1000)),closeTime};
+    }).sort((a,b)=>a.closeTime-b.closeTime).slice(0,25);
+    marketTime=new Date().toISOString();errors.kalshi=null;
+    io.emit('markets',markets);io.emit('connection:kalshi',true);
+  } catch(err) {
+    errors.kalshi=err.response?`HTTP ${err.response.status}: ${err.message}`:err.message;
+    io.emit('connection:kalshi',false);
+    console.error('[ReadOnly Kalshi]',errors.kalshi);
+  } finally {busyKalshi=false;}
+}
+io.on('connection',socket=>{
+  console.log('[Server] UI connected:',socket.id);
+  socket.emit('bot:status',{running:false});
+  socket.emit('snapshot',snapshot());
+  if(btc) socket.emit('readonly:btc',{price:btc,source:btcSource,timestamp:btcTime});
+  socket.emit('readonly:history',priceHistory);
+  socket.emit('connection:kalshi',!!marketTime);
 });
-
-// Start server, then agent
-server.listen(PORT, () => {
-  console.log(`\n  KALSHIBOT MISSION CONTROL (Agentic Architecture)`);
-  console.log(`  Dashboard:  http://localhost:${PORT}`);
-  console.log(`  Skills API: http://localhost:${PORT}/api/skills`);
-  console.log(`  Config: ${config.SERIES_TICKER} | MinEdge=${config.MIN_EDGE}% | MinDiv=${config.MIN_DIVERGENCE}% | MaxPos=$${config.MAX_POSITION_SIZE}\n`);
-
-  // Bot does NOT auto-start — user controls via dashboard toggle
-  console.log('  Bot is IDLE. Use the dashboard toggle to start trading.\n');
-});
-
-// Graceful shutdown
-process.on('SIGINT', () => {
-  console.log('\n[Server] Shutting down...');
-  if (agent.state) agent.state.saveNow();
-  agent.stop();
-  server.close();
-  process.exit(0);
+server.listen(PORT,()=>{
+  console.log(`[ReadOnly] Mission Control on port ${PORT}; NO TRADING ENGINE LOADED`);
+  getBTC();getKalshi();
+  setInterval(getBTC,15000);
+  setInterval(getKalshi,30000);
 });
