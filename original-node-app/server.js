@@ -28,6 +28,10 @@ const checkpointMonitor = require('./checkpoint-monitor')({axios, io,
   getSignal:()=>computePaperSignal(),
   supabaseUrl:process.env.KALSHIBOT_SUPABASE_URL,
   supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY});
+const officialOutcomes = require('./official-outcomes')({axios,io,
+  supabaseUrl:process.env.KALSHIBOT_SUPABASE_URL,
+  supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY,
+  seriesTicker:SERIES_TICKER});
 let busyBTC = false, busyKalshi = false;
 // Experimental spot momentum observations are not trained predictions.
 function computePaperSignal() {
@@ -171,6 +175,9 @@ app.get('/api/market-data', (_req,res) => res.json({mode:'read-only',btcPrice:bt
 app.get('/api/paper-signal', (_req,res)=>res.json({mode:'paper-only',...computePaperSignal()}));
 app.get('/api/paper-journal', (_req,res)=>res.json(paperSummary()));
 app.get('/api/checkpoints', (_req,res)=>res.json(checkpointMonitor.summary()));
+app.get('/api/official-performance', async (_req,res)=>{
+  const result=await officialOutcomes.performance();res.json(result);
+});
 app.get('/api/bot/status', (_req,res) => res.json({running:false, mode:'read-only'}));
 app.get('/api/state', (_req,res) => res.json(snapshot()));
 app.get('/api/ml', (_req,res) => res.json({trained:false,note:'AI model disabled in read-only mode'}));
@@ -260,9 +267,12 @@ server.listen(PORT,async()=>{
   console.log(`[ReadOnly] Mission Control on port ${PORT}; NO TRADING ENGINE LOADED`);
   await loadPaperJournal();
   await checkpointMonitor.load();
+  await officialOutcomes.load();
   getBTC();getKalshi();
   setInterval(getBTC,15000);
   setInterval(getKalshi,30000);
+  officialOutcomes.cycle().catch(err=>console.error('[OfficialOutcomes]',err.message));
+  setInterval(()=>officialOutcomes.cycle().catch(err=>console.error('[OfficialOutcomes]',err.message)),60000);
   setInterval(()=>{updatePaperJournal();flushPaperWrites().catch(()=>{});io.emit('paper:journal',paperSummary());},15000);
   setInterval(()=>{checkpointMonitor.tick();checkpointMonitor.flush().catch(()=>{});},15000);
 });

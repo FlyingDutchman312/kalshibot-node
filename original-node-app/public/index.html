@@ -88,6 +88,17 @@
       <div class="metric-sub" style="padding-top:8px;">Signals are experimental BTC spot momentum observations, not trades or calibrated AI forecasts. Missed checkpoints are never backfilled. Spot-proxy agreement is not Kalshi settlement accuracy.</div>
     </section>
 
+    <section class="panel full-panel" id="official-research" style="grid-column:1/-1;padding:14px;">
+      <div class="panel-header"><span class="panel-title">PHASE 3.3 • OFFICIAL KALSHI OUTCOME VERIFICATION (PAPER ONLY)</span></div>
+      <div class="metric-sub" id="official-status" style="margin:8px 0 12px;">Loading official outcomes...</div>
+      <div class="markets-table-wrap"><table class="markets-table"><thead><tr>
+        <th>MINUTE</th><th>UP/DOWN</th><th>NONE</th><th>MISSED</th><th>OFFICIALLY GRADED</th><th>CORRECT</th><th>INCORRECT</th><th>UNGRADED</th><th>OFFICIAL AGREEMENT</th>
+      </tr></thead><tbody id="official-stats"><tr><td colspan="9">Checking public settlements...</td></tr></tbody></table></div>
+      <div class="metric-sub" style="margin-top:10px;">Recent official market outcomes</div>
+      <div class="markets-table-wrap"><table class="markets-table"><thead><tr><th>TICKER</th><th>RESULT</th><th>YES=UP MAPPING</th><th>VERIFIED AT (UTC)</th></tr></thead><tbody id="official-recent"></tbody></table></div>
+      <div class="metric-sub" style="margin-top:8px;">Only finalized Kalshi YES/NO with verified contract wording count toward agreement. NONE/missed/unverified outcomes are excluded. Five checkpoints on one market are correlated. No actual trades, model probabilities, or P&amp;L.</div>
+    </section>
+
     <!-- Row 2: Bot Intent + Model -->
     <section class="panel wide-panel" id="panel-intent">
       <div class="panel-header">
@@ -258,5 +269,6 @@
   <script src="app.js?v=paper-phase3-20261119"></script>
   <script src="paper.js?v=paper-phase31-20261119"></script>
   <script src="checkpoints.js?v=phase32-20261119"></script>
+  <script src="official-outcomes.js?v=phase33-20261119"></script>
 </body>
 </html>
