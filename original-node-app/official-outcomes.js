@@ -107,5 +107,5 @@ module.exports = function createOfficialOutcomes({axios,io,supabaseUrl,supabaseK
         note:'Experimental paper-only observations. Checkpoints in the same market are correlated. No P&L or calibrated probability.'};
     }catch(e){return {...base,stats:[],error:'Performance read HTTP '+(e.response?.status||'network')};}
   }
-  return {load,cycle,summary,performance};
+  return {load,cycle,summary,performance,verifiedForResearch:()=>[...outcomes.values()].filter(o=>o.mappingVerified===true&&['yes','no'].includes(o.result)).map(o=>({ticker:o.ticker,result:o.result}))};
 };

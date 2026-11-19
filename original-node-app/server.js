@@ -32,6 +32,9 @@ const officialOutcomes = require('./official-outcomes')({axios,io,
   supabaseUrl:process.env.KALSHIBOT_SUPABASE_URL,
   supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY,
   seriesTicker:SERIES_TICKER});
+const performanceAnalytics=require('./performance-analytics')({axios,officialOutcomes,
+  supabaseUrl:process.env.KALSHIBOT_SUPABASE_URL,
+  supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY});
 let busyBTC = false, busyKalshi = false;
 // Experimental spot momentum observations are not trained predictions.
 function computePaperSignal() {
@@ -175,6 +178,9 @@ app.get('/api/market-data', (_req,res) => res.json({mode:'read-only',btcPrice:bt
 app.get('/api/paper-signal', (_req,res)=>res.json({mode:'paper-only',...computePaperSignal()}));
 app.get('/api/paper-journal', (_req,res)=>res.json(paperSummary()));
 app.get('/api/checkpoints', (_req,res)=>res.json(checkpointMonitor.summary()));
+app.get('/api/research-performance', async (_req,res)=>{
+  const report=await performanceAnalytics.performance();res.json(report);
+});
 app.get('/api/official-performance', async (_req,res)=>{
   const result=await officialOutcomes.performance();res.json(result);
 });
