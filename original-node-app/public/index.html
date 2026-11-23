@@ -307,5 +307,20 @@
   <script src="performance-analytics.js?v=phase34-20261119"></script>
   <script src="research-quality.js?v=phase35-20261119"></script>
   <script src="kalshi-account-view.js?v=readonly-20261119"></script>
+
+<section style="margin:24px;padding:20px;border:1px solid #657389;border-radius:12px">
+  <h2>Kalshi DEMO execution test</h2>
+  <p>One contract per BTC market, using the experimental spot-momentum direction.
+  Actual demo fills and settlement P&amp;L appear here. The daily $15 reservation cap
+  counts all attempts, including zero-fill orders. This tests execution and recording.
+  Use the forward scorecards to assess prediction quality.</p>
+  <label>Demo control token <input id="demoToken" type="password" autocomplete="off"></label>
+  <button id="demoRefresh">Refresh demo journal</button>
+  <button id="demoStart">Start demo automation</button>
+  <button id="demoStop">Stop new demo orders</button>
+  <p id="demoMessage" role="status">Configure demo credentials and storage, then refresh.</p>
+  <pre id="demoJournal" style="white-space:pre-wrap;max-height:420px;overflow:auto"></pre>
+</section>
+<script src="demo.js"></script>
 </body>
 </html>
