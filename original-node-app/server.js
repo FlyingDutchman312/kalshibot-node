@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Kalshibot Mission Control: hard read-only public market viewer.
+/** Kalshibot Mission Control: public research plus isolated optional demo testing.
  * Intentionally does not import, initialize, or start any trading agent.
  */
 require('dotenv').config();
@@ -40,6 +40,8 @@ const researchQuality=require('./research-quality')({axios,officialOutcomes,
   supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY,
   forwardStartUtc:process.env.KALSHIBOT_FORWARD_START_UTC});
 const accountViewer=require('./kalshi-account-readonly')({axios});
+const demoTrading = require('./demo-trading')({axios,
+  getSignal:()=>computePaperSignal(),getMarkets:()=>markets,getSpotTime:()=>btcTime});
 let busyBTC = false, busyKalshi = false;
 // Experimental spot momentum observations are not trained predictions.
 function computePaperSignal() {
@@ -177,8 +179,11 @@ function paperSummary(){
     proxyAccuracyPct:resolved.length?Math.round(1000*correct/resolved.length)/10:null,
     journal:paperJournal.slice(0,50)};
 }
+app.use('/api/demo', express.json({limit:'2kb'}));
+app.get('/api/demo', demoTrading.handler);
+app.post('/api/demo', demoTrading.handler);
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/api/health', (_req,res) => res.json({status:'ok', uptime:process.uptime(),botRunning:false, mode:'read-only',btcUpdatedAt:btcTime,marketsUpdatedAt:marketTime}));
+app.get('/api/health', (_req,res) => res.json({status:'ok', uptime:process.uptime(),botRunning:false, mode:'research-with-optional-demo',productionTradingEnabled:false,demoConfigured:demoTrading.configured,demoEnabled:demoTrading.enabled,btcUpdatedAt:btcTime,marketsUpdatedAt:marketTime}));
 app.get('/api/market-data', (_req,res) => res.json({mode:'read-only',btcPrice:btc,btcSource,btcUpdatedAt:btcTime,markets,marketsUpdatedAt:marketTime,errors,priceHistory}));
 app.get('/api/paper-signal', (_req,res)=>res.json({mode:'paper-only',...computePaperSignal()}));
 app.get('/api/paper-journal', (_req,res)=>res.json(paperSummary()));
@@ -284,6 +289,7 @@ server.listen(PORT,async()=>{
   await checkpointMonitor.load();
   await officialOutcomes.load();
   getBTC();getKalshi();
+  setInterval(()=>demoTrading.cycle(),15000);
   setInterval(getBTC,15000);
   setInterval(getKalshi,30000);
   officialOutcomes.cycle().catch(err=>console.error('[OfficialOutcomes]',err.message));
