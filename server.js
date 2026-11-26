@@ -12,6 +12,11 @@ const path = require('path');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
+const lastBroadcast = new Map();
+function broadcast(event, make, interval=60000) {
+  if (!io.engine.clientsCount || Date.now()-(lastBroadcast.get(event)||0)<interval) return;
+  lastBroadcast.set(event,Date.now()); io.emit(event,make());
+}
 const PORT = Number(process.env.PORT) || 3333;
 const SERIES_TICKER = process.env.SERIES_TICKER || 'KXBTC15M';
 const KALSHI_BASE = 'https://external-api.kalshi.com/trade-api/v2';
@@ -39,9 +44,7 @@ const researchQuality=require('./research-quality')({axios,officialOutcomes,
   supabaseUrl:process.env.KALSHIBOT_SUPABASE_URL,
   supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY,
   forwardStartUtc:process.env.KALSHIBOT_FORWARD_START_UTC});
-const accountViewer=require('./kalshi-account-readonly')({axios});
-const demoTrading = require('./demo-trading')({axios,
-  getSignal:()=>computePaperSignal(),getMarkets:()=>markets,getSpotTime:()=>btcTime});
+
 let busyBTC = false, busyKalshi = false;
 // Experimental spot momentum observations are not trained predictions.
 function computePaperSignal() {
@@ -116,10 +119,11 @@ async function flushPaperWrites() {
   if (!persistence.configured || flushing || !pendingWrites.size) return;
   flushing=true;
   try {
-    for(const [ticker,row] of pendingWrites) {
+    while(pendingWrites.size) {
+      const batch=[...pendingWrites.entries()].slice(0,50);
       try {
-        await dbRequest('POST','?on_conflict=ticker',[row]);
-        if (pendingWrites.get(ticker)===row) pendingWrites.delete(ticker);
+        await dbRequest('POST','?on_conflict=ticker',batch.map(([,row])=>row));
+        for(const [ticker,row] of batch) if (pendingWrites.get(ticker)===row) pendingWrites.delete(ticker);
         persistence.state='ready';persistence.lastError=null;persistence.lastSyncedAt=new Date().toISOString();
       } catch(err) {
         persistence.state='error';persistence.lastError='Supabase write failed (HTTP '+(err.response?.status||'network')+')';
@@ -167,7 +171,7 @@ function updatePaperJournal() {
     volatility:signal.model.volatility,proxyStatus:'pending',proxyCorrect:null};
   paperKnown.add(row.ticker);paperJournal.unshift(row);persistRow(row);
   if(paperJournal.length>200) paperJournal.pop();
-  io.emit('paper:journal',paperSummary());
+  broadcast('paper:journal',paperSummary);
 }
 function paperSummary(){
   const resolved=paperJournal.filter(r=>r.proxyCorrect!==null);
@@ -180,15 +184,14 @@ function paperSummary(){
     journal:paperJournal.slice(0,50)};
 }
 app.use('/api/demo', express.json({limit:'2kb'}));
-app.get('/api/demo', demoTrading.handler);
-app.post('/api/demo', demoTrading.handler);
+app.all('/api/demo', (_req,res)=>res.status(403).json({mode:'paper-only',enabled:false,productionOrders:false,message:'Demo disabled in research-only bandwidth build'}));
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/api/health', (_req,res) => res.json({status:'ok', uptime:process.uptime(),botRunning:false, mode:'research-with-optional-demo',productionTradingEnabled:false,demoConfigured:demoTrading.configured,demoEnabled:demoTrading.enabled,btcUpdatedAt:btcTime,marketsUpdatedAt:marketTime}));
+app.get('/api/health', (_req,res) => res.json({status:'ok', uptime:process.uptime(),botRunning:false, mode:'research-with-optional-demo',productionTradingEnabled:false,demoConfigured:false,demoEnabled:false,btcUpdatedAt:btcTime,marketsUpdatedAt:marketTime}));
 app.get('/api/market-data', (_req,res) => res.json({mode:'read-only',btcPrice:btc,btcSource,btcUpdatedAt:btcTime,markets,marketsUpdatedAt:marketTime,errors,priceHistory}));
 app.get('/api/paper-signal', (_req,res)=>res.json({mode:'paper-only',...computePaperSignal()}));
 app.get('/api/paper-journal', (_req,res)=>res.json(paperSummary()));
 app.get('/api/checkpoints', (_req,res)=>res.json(checkpointMonitor.summary()));
-app.get('/api/account-view', accountViewer.handler);
+app.get('/api/account-view', (_req,res)=>res.status(403).json({connected:false,tradingEnabled:false,message:'Account access disabled in research-only bandwidth build'}));
 app.get('/api/research-quality', async (_req,res)=>{
   res.json(await researchQuality.performance());
 });
@@ -239,8 +242,8 @@ async function getBTC() {
     while(priceHistory.length>180) priceHistory.shift();
     io.emit('price:binance',{mid:btc,bid:btc,ask:btc,source});
     io.emit('readonly:btc',{price,source,timestamp:btcTime});
-    io.emit('readonly:history',priceHistory);
-    io.emit('paper:journal',paperSummary());
+    broadcast('readonly:history',()=>priceHistory,30000);
+    broadcast('paper:journal',paperSummary);
     io.emit('connection:binance',true);
     updatePaperJournal();checkpointMonitor.tick();const signal=computePaperSignal();io.emit('intent',signal.intent);io.emit('model',signal.model);
   } catch(err) {
@@ -289,11 +292,11 @@ server.listen(PORT,async()=>{
   await checkpointMonitor.load();
   await officialOutcomes.load();
   getBTC();getKalshi();
-  setInterval(()=>demoTrading.cycle(),15000);
+  // Research-only: demo reconciliation and execution are intentionally not scheduled.
   setInterval(getBTC,15000);
   setInterval(getKalshi,30000);
   officialOutcomes.cycle().catch(err=>console.error('[OfficialOutcomes]',err.message));
-  setInterval(()=>officialOutcomes.cycle().catch(err=>console.error('[OfficialOutcomes]',err.message)),60000);
-  setInterval(()=>{updatePaperJournal();flushPaperWrites().catch(()=>{});io.emit('paper:journal',paperSummary());},15000);
+  setInterval(()=>officialOutcomes.cycle().catch(err=>console.error('[OfficialOutcomes]',err.message)),300000);
+  setInterval(()=>{updatePaperJournal();flushPaperWrites().catch(()=>{});broadcast('paper:journal',paperSummary);},15000);
   setInterval(()=>{checkpointMonitor.tick();checkpointMonitor.flush().catch(()=>{});},15000);
 });
