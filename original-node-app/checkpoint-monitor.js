@@ -6,7 +6,7 @@ module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,ge
   const minutes=[3,5,7,9,11], rows=new Map(), pending=new Map();
   const state={configured:Boolean(supabaseUrl&&supabaseKey),status:'unconfigured',lastError:null,lastSync:null};
   const limit=500, closeToleranceMs=60000, captureToleranceMs=45000;
-  let flushing=false;
+  let flushing=false, lastBroadcast=0;
   const url=(supabaseUrl||'').trim().replace(/\/$/,'');
   const key=(supabaseKey||'').trim();
   function keyFor(ticker,minute){return ticker+'|'+minute;}
@@ -35,8 +35,8 @@ module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,ge
     } catch(e){state.status='error';state.lastError='read HTTP '+(e.response?.status||'network');console.error('[Checkpoints]',state.lastError);}
   }
   async function flush(){if(!state.configured||flushing||!pending.size)return;flushing=true;
-    try{for(const [id,item] of pending){try{await request('POST','?on_conflict=ticker,checkpoint_minute',[item]);
-      if(pending.get(id)===item)pending.delete(id);
+    try{while(pending.size){const batch=[...pending.entries()].slice(0,50);try{await request('POST','?on_conflict=ticker,checkpoint_minute',batch.map(([,item])=>item));
+      for(const [id,item] of batch)if(pending.get(id)===item)pending.delete(id);
       state.status='ready';state.lastError=null;state.lastSync=new Date().toISOString();
     }catch(e){state.status='error';state.lastError='write HTTP '+(e.response?.status||'network');console.error('[Checkpoints]',state.lastError);break;}}}
     finally{flushing=false;}}
@@ -76,7 +76,7 @@ module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,ge
           proxyStatus:fresh?'pending':'invalid_price',proxyCorrect:null});
       }
     }
-    io.emit('checkpoint:summary',summary());
+    if (io.engine?.clientsCount && now-lastBroadcast>=60000) {lastBroadcast=now;io.emit('checkpoint:summary',summary());}
   }
   function summary(){const all=[...rows.values()].sort((a,b)=>
     (Date.parse(b.scheduledAt)||0)-(Date.parse(a.scheduledAt)||0));

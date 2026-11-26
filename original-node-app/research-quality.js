@@ -89,7 +89,7 @@ module.exports = function createResearchQuality({axios,officialOutcomes,supabase
       historical,forward:{markets:new Set(forward.map(r=>r.ticker)).size,rows:forward.length,checkpoints:prospective},daily,
       qualifications,note:'Forward cohort requires KALSHIBOT_FORWARD_START_UTC fixed before prospective collection. Repeated checkpoint outcomes within one market are correlated. Research-only qualification NEVER enables trading.'};
   }
-  function performance(){if(cached&&Date.now()-lastRun<60000)return Promise.resolve(cached);if(inflight)return inflight;
+  function performance(){if(cached&&Date.now()-lastRun<300000)return Promise.resolve(cached);if(inflight)return inflight;
     inflight=calculate().then(r=>{cached=r;lastRun=Date.now();return r;}).catch(e=>({mode:'paper-only',tradingEnabled:false,status:'error',error:'Research quality '+(e.response?.status?'HTTP '+e.response.status:'unavailable')})).finally(()=>{inflight=null;});return inflight;}
   return {performance};
 };

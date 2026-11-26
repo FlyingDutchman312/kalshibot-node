@@ -94,7 +94,7 @@ module.exports = function createPerformanceAnalytics({axios,officialOutcomes,sup
       note:'Descriptive market-level research only. Wilson intervals are descriptive and do not establish a profitable or out-of-sample strategy. Checkpoints on the same market are correlated. NO order execution.'};
   }
   async function performance(){
-    if(cache&&Date.now()-cacheAt<60000)return cache;
+    if(cache&&Date.now()-cacheAt<300000)return cache;
     if(inflight)return inflight;
     inflight=calculate().then(result=>{cache=result;cacheAt=Date.now();return result;}).catch(e=>({mode:'paper-only',tradingEnabled:false,status:'error',error:'Phase 3.4 analytics '+(e.response?.status?'HTTP '+e.response.status:'unavailable'),windows:[]})).finally(()=>{inflight=null;});
     return inflight;
