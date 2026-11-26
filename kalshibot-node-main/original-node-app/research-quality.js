@@ -77,6 +77,8 @@ module.exports = function createResearchQuality({axios,officialOutcomes,supabase
     const dates=[...new Set(forward.map(r=>new Date(r.close).toISOString().slice(0,10)))].sort().reverse();
     const daily=dates.slice(0,30).map(date=>({date,markets:new Set(forward.filter(r=>new Date(r.close).toISOString().startsWith(date)).map(r=>r.ticker)).size,
       checkpoints:MINUTES.map(minute=>({minute,...stats(forward.filter(r=>r.minute===minute&&new Date(r.close).toISOString().startsWith(date)))}))}));
+    const preForward=forwardConfigured?valid.filter(r=>r.close<=forwardStart):[];
+    const historicalOnly=MINUTES.map(minute=>({minute,...stats(preForward.filter(r=>r.minute===minute))}));
     const historical=MINUTES.map(minute=>({minute,...stats(valid.filter(r=>r.minute===minute))}));
     const prospective=MINUTES.map(minute=>({minute,...stats(forward.filter(r=>r.minute===minute))}));
     const qualifications=prospective.map(s=>({minute:s.minute,gradedMarkets:s.distinctGradedMarkets,
@@ -86,7 +88,7 @@ module.exports = function createResearchQuality({axios,officialOutcomes,supabase
     return {...base,allRowsRead:raw.length,validClosedRows:valid.length,pendingMarketRows:pending.length,
       invalidRows:invalid.length,invalidReasonCounts:reasonCounts,invalidExamples:invalid.slice(0,20),
       pendingExamples:pending.slice(0,10),truncatedAtRowCap:truncated,
-      historical,forward:{markets:new Set(forward.map(r=>r.ticker)).size,rows:forward.length,checkpoints:prospective},daily,
+      historical,historicalOnly,checkpointAudit:{expectedForwardRows:new Set(forward.map(r=>r.ticker)).size*MINUTES.length,absentOrExcludedForwardRows:new Set(forward.map(r=>r.ticker)).size*MINUTES.length-forward.length},forward:{markets:new Set(forward.map(r=>r.ticker)).size,rows:forward.length,checkpoints:prospective},daily,
       qualifications,note:'Forward cohort requires KALSHIBOT_FORWARD_START_UTC fixed before prospective collection. Repeated checkpoint outcomes within one market are correlated. Research-only qualification NEVER enables trading.'};
   }
   function performance(){if(cached&&Date.now()-lastRun<300000)return Promise.resolve(cached);if(inflight)return inflight;
