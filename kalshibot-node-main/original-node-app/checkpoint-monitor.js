@@ -2,7 +2,7 @@
  * No account credentials, orders, trading endpoints, or artificial backfills.
  */
 'use strict';
-module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,getSignal,supabaseUrl,supabaseKey}) {
+module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,getSignal,getMarketTime,supabaseUrl,supabaseKey}) {
   const minutes=[3,5,7,9,11], rows=new Map(), pending=new Map();
   const state={configured:Boolean(supabaseUrl&&supabaseKey),status:'unconfigured',lastError:null,lastSync:null};
   const limit=500, closeToleranceMs=60000, captureToleranceMs=45000;
@@ -70,6 +70,7 @@ module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,ge
         const reasonCode=fresh?signal.intent.reasonCode:'STALE_BTC_PRICE';
         add({ticker:market.ticker,checkpointMinute:minute,scheduledAt:new Date(at).toISOString(),
           observedAt:new Date(now).toISOString(),openTime:start,closeTime:close,action,reasonCode,
+          quote:require('./checkpoint-shadow').quote(market,getMarketTime?.(),now),
           entrySpot:fresh?btc.price:null,spotSource:fresh?btc.source:null,
           trend:signal.model.trend,spotMovePctAtSignal:signal.model.spotMovePct,
           shortMovePctAtSignal:signal.model.shortMovePct,volatility:signal.model.volatility,

@@ -1,0 +1,6 @@
+const test=require('node:test'),assert=require('node:assert/strict');const {compare,quote}=require('../checkpoint-shadow');
+const start='2026-11-27T00:00:00Z', t=Date.parse(start), q={at:new Date(t+420000).toISOString(),yesBid:.6,yesAsk:.7,noBid:.3,noAsk:.4};
+function row(minute,action='UP'){return {ticker:'KXBTC15M-X',minute,action,captured:true,scheduled:t+minute*60000,observed:t+minute*60000,close:t+900000,result:'yes',quote:q};}
+test('agreement priced at last checkpoint only',()=>{const x=compare([row(5),row(7)],start);const s=x.strategies.find(s=>s.name==='M5+M7');assert.equal(s.graded,1);assert.equal(s.priced,1);assert.ok(Math.abs(s.netUsd-.28)<1e-9);assert.equal(x.tradingEnabled,false);});
+test('disagreement and missing checkpoints abstain',()=>{const s=compare([row(5),row(7,'DOWN')],start).strategies;assert.equal(s.find(s=>s.name==='M5+M7').signals,0);assert.equal(s.find(s=>s.name==='M7+M9').eligible,0);});
+test('invalid quotes and pre-boundary rows excluded',()=>{assert.equal(quote(q,q.at,t+500000),null);assert.equal(quote({...q,yesAsk:null},q.at,t+420000),null);assert.equal(compare([row(5)],'2026-11-28T00:00:00Z').markets,0);assert.equal(compare([],null).status,'unconfigured');});

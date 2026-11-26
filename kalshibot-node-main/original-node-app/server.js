@@ -30,7 +30,7 @@ let errors = { btc: null, kalshi: null };
 const priceHistory = [];
 const checkpointMonitor = require('./checkpoint-monitor')({axios, io,
   getMarkets:()=>markets, getBTC:()=>({price:btc,source:btcSource,time:btcTime}),
-  getSignal:()=>computePaperSignal(),
+  getSignal:()=>computePaperSignal(),getMarketTime:()=>marketTime,
   supabaseUrl:process.env.KALSHIBOT_SUPABASE_URL,
   supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY});
 const officialOutcomes = require('./official-outcomes')({axios,io,
@@ -43,6 +43,7 @@ const performanceAnalytics=require('./performance-analytics')({axios,officialOut
 const researchQuality=require('./research-quality')({axios,officialOutcomes,
   supabaseUrl:process.env.KALSHIBOT_SUPABASE_URL,
   supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY,
+  shadowStartUtc:process.env.KALSHIBOT_PHASE36_START_UTC,
   forwardStartUtc:process.env.KALSHIBOT_FORWARD_START_UTC});
 
 let busyBTC = false, busyKalshi = false;
@@ -186,12 +187,13 @@ function paperSummary(){
 app.use('/api/demo', express.json({limit:'2kb'}));
 app.all('/api/demo', (_req,res)=>res.status(403).json({mode:'paper-only',enabled:false,productionOrders:false,message:'Demo disabled in research-only bandwidth build'}));
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/api/health', (_req,res) => res.json({status:'ok', uptime:process.uptime(),botRunning:false, mode:'research-with-optional-demo',productionTradingEnabled:false,demoConfigured:false,demoEnabled:false,btcUpdatedAt:btcTime,marketsUpdatedAt:marketTime}));
+app.get('/api/health', (_req,res) => res.json({status:'ok',researchPhase:'3.6', uptime:process.uptime(),botRunning:false, mode:'research-with-optional-demo',productionTradingEnabled:false,demoConfigured:false,demoEnabled:false,btcUpdatedAt:btcTime,marketsUpdatedAt:marketTime}));
 app.get('/api/market-data', (_req,res) => res.json({mode:'read-only',btcPrice:btc,btcSource,btcUpdatedAt:btcTime,markets,marketsUpdatedAt:marketTime,errors,priceHistory}));
 app.get('/api/paper-signal', (_req,res)=>res.json({mode:'paper-only',...computePaperSignal()}));
 app.get('/api/paper-journal', (_req,res)=>res.json(paperSummary()));
 app.get('/api/checkpoints', (_req,res)=>res.json(checkpointMonitor.summary()));
 app.get('/api/account-view', (_req,res)=>res.status(403).json({connected:false,tradingEnabled:false,message:'Account access disabled in research-only bandwidth build'}));
+app.get('/api/checkpoint-shadow', async (_req,res)=>{const r=await researchQuality.performance();res.json(r.shadow||{phase:'3.6',status:r.status,tradingEnabled:false});});
 app.get('/api/research-quality', async (_req,res)=>{
   res.json(await researchQuality.performance());
 });
@@ -252,9 +254,9 @@ async function getBTC() {
   } finally {busyBTC=false;}
 }
 function centsField(m,name) {
-  const inCents=getNumber(m[name]);
+  const inCents=m[name]==null?null:getNumber(m[name]);
   if(inCents!==null) return inCents/100;
-  return getNumber(m[name+'_dollars']);
+  return m[name+'_dollars']==null?null:getNumber(m[name+'_dollars']);
 }
 async function getKalshi() {
   if(busyKalshi) return;

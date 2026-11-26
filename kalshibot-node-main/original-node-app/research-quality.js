@@ -2,7 +2,7 @@
  * Reads existing checkpoint data; never places orders, changes predictions, or writes DB rows.
  */
 'use strict';
-module.exports = function createResearchQuality({axios,officialOutcomes,supabaseUrl,supabaseKey,forwardStartUtc}) {
+module.exports = function createResearchQuality({axios,officialOutcomes,supabaseUrl,supabaseKey,forwardStartUtc,shadowStartUtc}) {
   const root=String(supabaseUrl||'').trim().replace(/\/+$/,'');
   const key=String(supabaseKey||'').trim();
   const configured=Boolean(root&&key);
@@ -51,7 +51,7 @@ module.exports = function createResearchQuality({axios,officialOutcomes,supabase
     // An otherwise valid observation can be unfinished, not invalid.
     const pending=reasons.length===0&&close>now;
     return {ticker,minute,close,observed,scheduled,action,reason:String(p.reasonCode||''),
-      captured:reasons.length===0&&p.observedAt!=null&&p.reasonCode!=='MISSED_CHECKPOINT',
+      quote:p.quote, captured:reasons.length===0&&p.observedAt!=null&&p.reasonCode!=='MISSED_CHECKPOINT',
       problems:reasons,pending};
   }
   async function calculate(){
@@ -88,7 +88,7 @@ module.exports = function createResearchQuality({axios,officialOutcomes,supabase
     return {...base,allRowsRead:raw.length,validClosedRows:valid.length,pendingMarketRows:pending.length,
       invalidRows:invalid.length,invalidReasonCounts:reasonCounts,invalidExamples:invalid.slice(0,20),
       pendingExamples:pending.slice(0,10),truncatedAtRowCap:truncated,
-      historical,historicalOnly,checkpointAudit:{expectedForwardRows:new Set(forward.map(r=>r.ticker)).size*MINUTES.length,absentOrExcludedForwardRows:new Set(forward.map(r=>r.ticker)).size*MINUTES.length-forward.length},forward:{markets:new Set(forward.map(r=>r.ticker)).size,rows:forward.length,checkpoints:prospective},daily,
+      shadow:require('./checkpoint-shadow').compare(valid,shadowStartUtc,truncated),historical,historicalOnly,checkpointAudit:{expectedForwardRows:new Set(forward.map(r=>r.ticker)).size*MINUTES.length,absentOrExcludedForwardRows:new Set(forward.map(r=>r.ticker)).size*MINUTES.length-forward.length},forward:{markets:new Set(forward.map(r=>r.ticker)).size,rows:forward.length,checkpoints:prospective},daily,
       qualifications,note:'Forward cohort requires KALSHIBOT_FORWARD_START_UTC fixed before prospective collection. Repeated checkpoint outcomes within one market are correlated. Research-only qualification NEVER enables trading.'};
   }
   function performance(){if(cached&&Date.now()-lastRun<300000)return Promise.resolve(cached);if(inflight)return inflight;
