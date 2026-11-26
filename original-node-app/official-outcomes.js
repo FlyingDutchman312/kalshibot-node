@@ -7,8 +7,12 @@ module.exports = function createOfficialOutcomes({axios,io,supabaseUrl,supabaseK
   const BASE='https://external-api.kalshi.com/trade-api/v2';
   const status={configured,state:configured?'starting':'unconfigured',lastError:null,lastSyncedAt:null,lastCheckedAt:null};
   const outcomes=new Map(), lastAttempt=new Map();
-  let running=false, lastCheckpointCount=0;
-  const MAX_CHECKPOINTS=500, MAX_MARKETS_PER_PASS=12, RETRY_MS=5*60*1000;
+  const MAPPING_VERSION="yes-up-v1";
+  let restoredVerified=0;
+  let running=false, cycling=false, lastCheckpointCount=0, scanOffset=0, completedScans=0;
+  const candidates=new Map();
+  const diagnostics={attempted:0,recovered:0,notFound:0,notFinal:0,mappingRejected:0,errors:0};
+  const MAX_CHECKPOINTS=500, MAX_MARKETS_PER_PASS=24, RETRY_MS=30*60*1000;
   function apiBase(){const u=new URL(root);if(u.protocol!=='https:'||!/^[a-z0-9-]+\.supabase\.co$/i.test(u.hostname))throw Error('Invalid Supabase URL');return u.origin+'/rest/v1/';}
   async function db(method,table,suffix='',data){return (await axios({method,url:apiBase()+table+suffix,data,timeout:12000,headers:{apikey:secret,Authorization:'Bearer '+secret,'Content-Type':'application/json',Prefer:'resolution=merge-duplicates,return=minimal'}})).data;}
   function pct(n,d){return d?Math.round(1000*n/d)/10:null;}
@@ -37,58 +41,60 @@ module.exports = function createOfficialOutcomes({axios,io,supabaseUrl,supabaseK
     try{return (await axios.get(url,{timeout:10000,headers:{'User-Agent':'KalshibotResearchReadOnly/1.0','Accept':'application/json'}})).data?.market;}
     catch(e){if(e.response?.status!==404)throw e;}
     // Markets older than the public/historical cutoff may be available via historical list.
-    const resp=await axios.get(BASE+'/historical/markets',{params:{tickers:ticker,limit:10},timeout:10000,headers:{'User-Agent':'KalshibotResearchReadOnly/1.0'}});
-    return (resp.data?.markets||[]).find(m=>m.ticker===ticker)||null;
+    try{return (await axios.get(BASE+'/historical/markets/'+encodeURIComponent(ticker),{timeout:10000})).data?.market||null;}catch(e){if(e.response?.status===404)return null;throw e;}
   }
   async function load(){if(!configured)return;
-    try{const records=await db('GET','kalshibot_official_outcomes','?select=*&order=updated_at.desc&limit=1000');
-      for(const r of Array.isArray(records)?records:[])if(isSafeTicker(r.ticker))outcomes.set(r.ticker,{...r,mappingVerified:null});
+    try{for(let offset=0;;offset+=500){
+      const records=await db('GET','kalshibot_official_outcomes',`?select=*&order=ticker.asc&limit=500&offset=${offset}`);
+      if(!Array.isArray(records))throw Error('Invalid outcome response');
+      for(const r of records)if(isSafeTicker(r.ticker)){
+        const trusted=r.mapping_verified===true&&r.mapping_version===MAPPING_VERSION&&Number.isFinite(Date.parse(r.mapping_verified_at))&&r.source==='kalshi_public_api'&&['settled','finalized'].includes(r.market_status)&&['yes','no'].includes(r.result);
+        outcomes.set(r.ticker,{...r,mappingVerified:trusted?true:null});
+        if(trusted)restoredVerified++;
+      }
+      if(records.length<500)break;
+      }
       status.state='ready';status.lastError=null;status.lastSyncedAt=new Date().toISOString();
       console.log('[OfficialOutcomes] restored',outcomes.size,'outcomes');
     }catch(e){status.state='error';status.lastError='Supabase outcomes read HTTP '+(e.response?.status||'network');console.error('[OfficialOutcomes]',status.lastError);}}
   async function collect(){if(!configured||running)return;running=true;
     try{
       // Research only: read checkpoint rows, not orders, positions, or credentials.
-      const data=await db('GET','kalshibot_checkpoint_signals',`?select=ticker,checkpoint_minute,payload&order=updated_at.desc&limit=${MAX_CHECKPOINTS}`);
+      // Rotate through stable ordered pages instead of permanently revisiting the newest 500 rows.
+      const data=await db('GET','kalshibot_checkpoint_signals',`?select=ticker,close_time:payload->>closeTime&order=ticker.asc,checkpoint_minute.asc&limit=${MAX_CHECKPOINTS}&offset=${scanOffset}`);
       const checkpoints=Array.isArray(data)?data:[];lastCheckpointCount=checkpoints.length;
-      const now=Date.now(), tickers=new Map();
-      for(const x of checkpoints){const row=x.payload||{};
-        if(!isSafeTicker(x.ticker)||!Number.isFinite(Number(row.closeTime))||Number(row.closeTime)>now-60000)continue;
-        if(!tickers.has(x.ticker))tickers.set(x.ticker,Number(row.closeTime));}
-      const next=[...tickers].filter(([ticker])=>{
-        const old=outcomes.get(ticker);return (!old||!['yes','no'].includes(String(old.result).toLowerCase()))&&now-(lastAttempt.get(ticker)||0)>RETRY_MS;
-      }).sort((a,b)=>b[1]-a[1]).slice(0,MAX_MARKETS_PER_PASS);
-      for(const [ticker] of next){lastAttempt.set(ticker,Date.now());try{
-        const m=await getMarket(ticker);if(!m)continue;
-        const o=normal(m);
-        if(!o.result)continue; // never invent settlement, never count closed-only
+      if(checkpoints.length<MAX_CHECKPOINTS){scanOffset=0;completedScans++;}else scanOffset+=checkpoints.length;
+      const now=Date.now();
+      for(const x of checkpoints){const close=Number(x.close_time??x.payload?.closeTime);
+        if(isSafeTicker(x.ticker)&&Number.isFinite(close)&&close>0&&close<=now-60000)candidates.set(x.ticker,close);}
+      const next=[...candidates].filter(([ticker])=>outcomes.get(ticker)?.mappingVerified!==true&&now-(lastAttempt.get(ticker)||0)>RETRY_MS)
+        .sort((a,b)=>(lastAttempt.get(a[0])||0)-(lastAttempt.get(b[0])||0)||a[1]-b[1]).slice(0,MAX_MARKETS_PER_PASS);
+      const writes=[];
+      for(const [ticker] of next){lastAttempt.set(ticker,Date.now());diagnostics.attempted++;try{
+        const m=await getMarket(ticker);if(!m||m.ticker!==ticker){diagnostics.notFound++;continue;}
+        const o=normal(m);if(!o.result){diagnostics.notFinal++;continue;}
+        if(!o.mappingVerified)diagnostics.mappingRejected++;
         const dbRow={ticker:o.ticker,market_status:o.market_status,result:o.result,settlement_time:o.settlement_time,
-          source:o.source,verified_at:o.verified_at,updated_at:o.updated_at};
-        await db('POST','kalshibot_official_outcomes','?on_conflict=ticker',[dbRow]);
-        outcomes.set(ticker,{...dbRow,mappingVerified:o.mappingVerified,title:o.title});
-      }catch(e){status.lastError='Kalshi/DB lookup for a market failed (HTTP '+(e.response?.status||'network')+')';console.error('[OfficialOutcomes]',ticker,status.lastError);}}
-      // Refresh rows to remain compatible with other services that may write settlements.
-      const stored=await db('GET','kalshibot_official_outcomes','?select=*&order=updated_at.desc&limit=1000');
-      for(const r of Array.isArray(stored)?stored:[]){
-        const prev=outcomes.get(r.ticker);
-        if(isSafeTicker(r.ticker))outcomes.set(r.ticker,{...r,mappingVerified:prev?.mappingVerified??null,title:prev?.title||''});}
+          source:o.source,verified_at:o.verified_at,updated_at:o.updated_at,
+          mapping_verified:o.mappingVerified,mapping_version:MAPPING_VERSION,mapping_verified_at:new Date().toISOString()};
+        writes.push({dbRow,o});
+      }catch(e){diagnostics.errors++;status.lastError='Kalshi lookup HTTP '+(e.response?.status||'network');if(e.response?.status===429)break;}}
+      if(writes.length){await db('POST','kalshibot_official_outcomes','?on_conflict=ticker',writes.map(x=>x.dbRow));
+        for(const {dbRow,o} of writes){outcomes.set(o.ticker,{...dbRow,mappingVerified:o.mappingVerified,title:o.title});diagnostics.recovered++;}}
       status.state='ready';status.lastSyncedAt=new Date().toISOString();
     }catch(e){status.state='error';status.lastError='Phase 3.3 collection HTTP '+(e.response?.status||'network');console.error('[OfficialOutcomes]',status.lastError);}
     finally{status.lastCheckedAt=new Date().toISOString();running=false;io.emit('official:summary',summary());}
   }
   // Do not consider an outcome without confirmed semantics verifiable for a directional score.
-  // Mapping flags are process-local and reverified on restart by checking the market again.
-  async function verifyMappings(){if(running)return;const unknown=[...outcomes.values()].filter(x=>x.result&&x.mappingVerified==null).slice(0,12);
-    for(const item of unknown){try{const m=await getMarket(item.ticker);if(m)item.mappingVerified=safeMapping(m);
-    }catch(_e){/* Remains unverified; do not score */}}
-  }
-  async function cycle(){await collect();await verifyMappings();io.emit('official:summary',summary());}
+  // Persist mapping evidence only after exact-ticker public verification and successful DB write.
+  async function cycle(){if(cycling)return;cycling=true;try{await collect();}finally{cycling=false;}}
   function summary(){const checkpointRecords=[];
     // Comparison snapshot is assembled in /api/official-performance by loadable async DB call.
     const verified=[...outcomes.values()].filter(x=>['yes','no'].includes(String(x.result).toLowerCase()));
     return {mode:'paper-only',storage:status.state==='ready'?'supabase':configured?'degraded':'unconfigured',
       persistence:{...status},verifiedMarkets:verified.length,mappingValidated:verified.filter(x=>x.mappingVerified===true).length,
       mappingUnverified:verified.filter(x=>x.mappingVerified!==true).length,checkpointRowsSeen:lastCheckpointCount,
+      recovery:{version:"3.6.1",restoredVerified,persistedVerified:verified.filter(x=>x.mappingVerified===true&&x.mapping_verified===true).length,scanOffset,completedScans,discoveredMarkets:candidates.size,remaining:[...candidates.keys()].filter(t=>outcomes.get(t)?.mappingVerified!==true).length,...diagnostics},
       recent:verified.slice(-20).reverse().map(x=>({ticker:x.ticker,result:x.result,mappingVerified:x.mappingVerified===true,verifiedAt:x.verified_at})),checkpointRecords};}
   async function performance(){const base=summary();if(!configured)return {...base,stats:[],note:'Supabase not configured'};
     try{const records=await db('GET','kalshibot_checkpoint_signals',`?select=ticker,checkpoint_minute,payload&order=updated_at.desc&limit=${MAX_CHECKPOINTS}`);
