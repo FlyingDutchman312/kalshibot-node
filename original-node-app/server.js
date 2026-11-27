@@ -46,6 +46,9 @@ const researchQuality=require('./research-quality')({axios,officialOutcomes,
   supabaseKey:process.env.KALSHIBOT_SUPABASE_SERVICE_KEY,
   shadowStartUtc:researchConfig.inspect(process.env.KALSHIBOT_PHASE36_START_UTC).startUtc,
   forwardStartUtc:process.env.KALSHIBOT_FORWARD_START_UTC});
+const researchHealth=require('./research-health').createResearchHealth({axios,
+  getLocalSnapshot:()=>({btcAt:btcTime,marketsAt:marketTime,errors,
+    checkpoints:checkpointMonitor.summary(),official:officialOutcomes.summary()})});
 
 let busyBTC = false, busyKalshi = false;
 // Experimental spot momentum observations are not trained predictions.
@@ -188,7 +191,11 @@ function paperSummary(){
 app.use('/api/demo', express.json({limit:'2kb'}));
 app.all('/api/demo', (_req,res)=>res.status(403).json({mode:'paper-only',enabled:false,productionOrders:false,message:'Demo disabled in research-only bandwidth build'}));
 app.use(express.static(path.join(__dirname, 'public')));
-app.get('/api/health', (_req,res) => res.json({status:'ok',researchPhase:'3.6.2', uptime:process.uptime(),botRunning:false, mode:'research-with-optional-demo',productionTradingEnabled:false,demoConfigured:false,demoEnabled:false,btcUpdatedAt:btcTime,marketsUpdatedAt:marketTime}));
+app.get('/api/health', (_req,res) => res.json({status:'ok',researchPhase:'3.6.3', uptime:process.uptime(),botRunning:false, mode:'research-with-optional-demo',productionTradingEnabled:false,demoConfigured:false,demoEnabled:false,btcUpdatedAt:btcTime,marketsUpdatedAt:marketTime}));
+app.get('/api/research-health', async (_req,res)=>{
+  try{res.set('Cache-Control','no-store').json(await researchHealth.get());}
+  catch(_err){res.status(503).json({status:'unavailable',tradingEnabled:false});}
+});
 app.get('/api/market-data', (_req,res) => res.json({mode:'read-only',btcPrice:btc,btcSource,btcUpdatedAt:btcTime,markets,marketsUpdatedAt:marketTime,errors,priceHistory}));
 app.get('/api/paper-signal', (_req,res)=>res.json({mode:'paper-only',...computePaperSignal()}));
 app.get('/api/paper-journal', (_req,res)=>res.json(paperSummary()));
