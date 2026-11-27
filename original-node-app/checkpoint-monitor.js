@@ -2,7 +2,8 @@
  * No account credentials, orders, trading endpoints, or artificial backfills.
  */
 'use strict';
-module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,getSignal,supabaseUrl,supabaseKey}) {
+const {quote}=require('./checkpoint-shadow');
+module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,getSignal,getMarketTime,supabaseUrl,supabaseKey}) {
   const minutes=[3,5,7,9,11], rows=new Map(), pending=new Map();
   const state={configured:Boolean(supabaseUrl&&supabaseKey),status:'unconfigured',lastError:null,lastSync:null};
   const limit=500, closeToleranceMs=60000, captureToleranceMs=45000;
@@ -68,8 +69,13 @@ module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,ge
            entrySpot:null,proxyStatus:'missed_checkpoint',proxyCorrect:null});continue;}
         const signal=getSignal();const action=fresh?signal.intent.action:'NONE';
         const reasonCode=fresh?signal.intent.reasonCode:'STALE_BTC_PRICE';
+        // Capture the contemporaneous market snapshot once. Never repair an old
+        // checkpoint using a later quote or today's market prices.
+        const checkpointQuote=quote(market,getMarketTime?.(),now);
         add({ticker:market.ticker,checkpointMinute:minute,scheduledAt:new Date(at).toISOString(),
           observedAt:new Date(now).toISOString(),openTime:start,closeTime:close,action,reasonCode,
+          quote:checkpointQuote,quoteCaptureVersion:'3.6.2',
+          quoteStatus:checkpointQuote?'RECORDED':'MISSING_STALE_OR_INVALID',
           entrySpot:fresh?btc.price:null,spotSource:fresh?btc.source:null,
           trend:signal.model.trend,spotMovePctAtSignal:signal.model.spotMovePct,
           shortMovePctAtSignal:signal.model.shortMovePct,volatility:signal.model.volatility,
@@ -90,7 +96,7 @@ module.exports = function createCheckpointMonitor({axios,io,getMarkets,getBTC,ge
        proxyAgreementPct:evaluated.length?Math.round(correct/evaluated.length*1000)/10:null};});
     return {mode:'paper-observation-only',storage:state.status==='ready'?'supabase':state.configured?'degraded':'volatile',
       persistence:{...state,pendingWrites:pending.size},source:'public BTC spot proxy; NOT official Kalshi settlement',
-      checkpointMinutes:minutes,stats,journal:all.slice(0,100)};
+      quoteCaptureVersion:'3.6.2',quoteCoverage:{recorded:all.filter(r=>r.quote).length,missing:all.filter(r=>r.observedAt&&!r.quote).length},checkpointMinutes:minutes,stats,journal:all.slice(0,100)};
   }
   return {load,flush,tick,summary};
 };
