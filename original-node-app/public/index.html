@@ -41,6 +41,18 @@
   <!-- Main Grid -->
   <main class="grid">
 
+    <section class="panel full-panel" id="research-health" style="grid-column:1/-1;padding:14px;">
+      <div class="panel-header"><h2 class="panel-title">RESEARCH HEALTH · THREE APPS</h2></div>
+      <p class="metric-sub" id="research-health-status" role="status">Loading read-only health checks…</p>
+      <button id="research-health-refresh" type="button">Refresh health summary</button>
+      <div class="markets-table-wrap"><table class="markets-table"><thead><tr>
+        <th>APP</th><th>STATUS</th><th>POLL AGE</th><th>MISSED CHECKPOINTS</th><th>DISCOVERED SETTLEMENT BACKLOG</th><th>QUOTE / RATE-LIMIT CHECK</th><th>CURRENT ISSUES</th>
+      </tr></thead><tbody id="research-health-rows"><tr><td colspan="7">Checking research services…</td></tr></tbody></table></div>
+      <details class="metric-sub"><summary>Coverage and limits</summary><div id="research-health-details"></div>
+        <p>Unknown counts need the app’s detailed research page. These checks cannot certify predictive edge or trading readiness.</p>
+      </details>
+    </section>
+
     <!-- Row 1: Key Metrics -->
     <section class="panel metric-panel" id="panel-btc">
       <div class="metric-label">BTC/USD</div>
@@ -300,6 +312,7 @@
 
   </main>
 
+  <script src="research-health.js?v=phase363"></script>
   <script src="app.js?v=paper-phase3-20261119"></script>
   <script src="paper.js?v=paper-phase31-20261119"></script>
   <script src="checkpoints.js?v=phase32-20261119"></script>
